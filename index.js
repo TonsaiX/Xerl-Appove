@@ -72,8 +72,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === "setuprequest") {
 
       const embed = new EmbedBuilder()
-        .setTitle("🎤 ระบบขอเข้าห้อง Voice")
-        .setDescription("กดปุ่มด้านล่างเพื่อส่งคำขอเข้า Voice")
+        .setTitle("🎤 ระบบขอเข้าห้อง Live")
+        .setDescription("กดปุ่มด้านล่างเพื่อส่งคำขอเข้า Live Stream")
         .setColor("Blue");
 
       const button = new ButtonBuilder()
