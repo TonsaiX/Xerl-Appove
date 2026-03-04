@@ -9,6 +9,7 @@ const {
   REST,
   Routes,
   SlashCommandBuilder,
+  PermissionFlagsBits,
 } = require("discord.js");
 
 require("dotenv").config();
@@ -19,15 +20,11 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
   ],
 });
 
 /* ================= CONFIG ================= */
 
-const COOLDOWN_TIME = 60 * 1000;
-const cooldown = new Map();
 const pendingRequests = new Map();
 
 const APPROVER_ROLES = process.env.APPROVER_ROLE_IDS
@@ -39,28 +36,23 @@ const APPROVER_ROLES = process.env.APPROVER_ROLE_IDS
 async function registerCommands() {
   const commands = [
     new SlashCommandBuilder()
-      .setName("request")
-      .setDescription("ขอเข้าห้อง Voice")
+      .setName("setuprequest")
+      .setDescription("สร้างข้อความขอเข้าห้อง Voice")
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
       .toJSON(),
   ];
 
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-  try {
-    console.log("🔄 Registering slash commands...");
+  await rest.put(
+    Routes.applicationGuildCommands(
+      process.env.CLIENT_ID,
+      process.env.GUILD_ID
+    ),
+    { body: commands }
+  );
 
-    await rest.put(
-      Routes.applicationGuildCommands(
-        process.env.CLIENT_ID,
-        process.env.GUILD_ID
-      ),
-      { body: commands }
-    );
-
-    console.log("✅ Slash commands registered!");
-  } catch (err) {
-    console.error("❌ Register error:", err);
-  }
+  console.log("✅ Slash commands registered");
 }
 
 /* ================= READY ================= */
@@ -70,13 +62,43 @@ client.once("ready", async () => {
   await registerCommands();
 });
 
-/* ================= INTERACTIONS ================= */
+/* ================= INTERACTION ================= */
 
 client.on(Events.InteractionCreate, async (interaction) => {
 
   /* ===== SLASH COMMAND ===== */
   if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === "request") {
+
+    if (interaction.commandName === "setuprequest") {
+
+      const embed = new EmbedBuilder()
+        .setTitle("🎤 ระบบขอเข้าห้อง Voice")
+        .setDescription("กดปุ่มด้านล่างเพื่อส่งคำขอเข้า Voice")
+        .setColor("Blue");
+
+      const button = new ButtonBuilder()
+        .setCustomId("request_voice")
+        .setLabel("📩 ขอเข้าห้อง")
+        .setStyle(ButtonStyle.Primary);
+
+      const row = new ActionRowBuilder().addComponents(button);
+
+      await interaction.channel.send({
+        embeds: [embed],
+        components: [row],
+      });
+
+      return interaction.reply({
+        content: "✅ สร้างระบบขอเข้าเรียบร้อย",
+        ephemeral: true,
+      });
+    }
+  }
+
+  /* ===== BUTTON ===== */
+  if (interaction.isButton()) {
+
+    if (interaction.customId === "request_voice") {
 
       const member = interaction.member;
 
@@ -91,53 +113,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       if (pendingRequests.has(member.id)) {
-        return interaction.reply({
-          content: "⏳ คุณมีคำขอรออยู่แล้ว",
-          ephemeral: true,
-        });
-      }
-
-      const lastUsed = cooldown.get(member.id);
-      const now = Date.now();
-
-      if (lastUsed && now - lastUsed < COOLDOWN_TIME) {
-        const timeLeft = Math.ceil(
-          (COOLDOWN_TIME - (now - lastUsed)) / 1000
-        );
-        return interaction.reply({
-          content: `⏳ รออีก ${timeLeft} วินาที`,
-          ephemeral: true,
-        });
-      }
-
-      cooldown.set(member.id, now);
-
-      const embed = new EmbedBuilder()
-        .setTitle("🎤 ขอเข้าห้อง Voice")
-        .setDescription("กดปุ่มเพื่อส่งคำขอ")
-        .setColor("Blue");
-
-      const button = new ButtonBuilder()
-        .setCustomId("request_voice")
-        .setLabel("📩 ขอเข้าห้อง")
-        .setStyle(ButtonStyle.Primary);
-
-      const row = new ActionRowBuilder().addComponents(button);
-
-      return interaction.reply({
-        embeds: [embed],
-        components: [row],
-        ephemeral: true,
-      });
-    }
-  }
-
-  /* ===== BUTTONS ===== */
-  if (interaction.isButton()) {
-
-    if (interaction.customId === "request_voice") {
-
-      if (pendingRequests.has(interaction.user.id)) {
         return interaction.reply({
           content: "⏳ คุณมีคำขอรออยู่แล้ว",
           ephemeral: true,
@@ -185,6 +160,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
 
+    /* ===== APPROVE / DENY ===== */
     if (
       interaction.customId.startsWith("approve_") ||
       interaction.customId.startsWith("deny_")
@@ -211,7 +187,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       pendingRequests.delete(userId);
-      return interaction.message.delete();
+      await interaction.message.delete();
     }
   }
 });
