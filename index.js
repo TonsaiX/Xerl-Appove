@@ -6,9 +6,14 @@ const {
   ButtonBuilder,
   ButtonStyle,
   Events,
+  REST,
+  Routes,
+  SlashCommandBuilder,
 } = require("discord.js");
 
 require("dotenv").config();
+
+/* ================= CLIENT ================= */
 
 const client = new Client({
   intents: [
@@ -19,28 +24,66 @@ const client = new Client({
   ],
 });
 
+/* ================= CONFIG ================= */
+
+const COOLDOWN_TIME = 60 * 1000;
 const cooldown = new Map();
 const pendingRequests = new Map();
-const COOLDOWN_TIME = 60 * 1000;
 
 const APPROVER_ROLES = process.env.APPROVER_ROLE_IDS
   ? process.env.APPROVER_ROLE_IDS.split(",").map(id => id.trim())
   : [];
 
-client.once("ready", () => {
+/* ================= AUTO REGISTER ================= */
+
+async function registerCommands() {
+  const commands = [
+    new SlashCommandBuilder()
+      .setName("request")
+      .setDescription("ขอเข้าห้อง Voice")
+      .toJSON(),
+  ];
+
+  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+
+  try {
+    console.log("🔄 Registering slash commands...");
+
+    await rest.put(
+      Routes.applicationGuildCommands(
+        process.env.CLIENT_ID,
+        process.env.GUILD_ID
+      ),
+      { body: commands }
+    );
+
+    console.log("✅ Slash commands registered!");
+  } catch (err) {
+    console.error("❌ Register error:", err);
+  }
+}
+
+/* ================= READY ================= */
+
+client.once("ready", async () => {
   console.log("✅ Bot Online");
+  await registerCommands();
 });
+
+/* ================= INTERACTIONS ================= */
 
 client.on(Events.InteractionCreate, async (interaction) => {
 
-  // ================= SLASH =================
+  /* ===== SLASH COMMAND ===== */
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === "request") {
 
       const member = interaction.member;
 
-      if (!member.voice.channel ||
-          member.voice.channel.id !== process.env.WAITING_VOICE_ID) {
+      if (
+        !member.voice.channel ||
+        member.voice.channel.id !== process.env.WAITING_VOICE_ID
+      ) {
         return interaction.reply({
           content: "❌ ต้องอยู่ในห้องรอก่อน",
           ephemeral: true,
@@ -81,7 +124,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const row = new ActionRowBuilder().addComponents(button);
 
-      await interaction.reply({
+      return interaction.reply({
         embeds: [embed],
         components: [row],
         ephemeral: true,
@@ -89,7 +132,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 
-  // ================= BUTTON =================
+  /* ===== BUTTONS ===== */
   if (interaction.isButton()) {
 
     if (interaction.customId === "request_voice") {
@@ -101,9 +144,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
 
+      const adminChannel = interaction.guild.channels.cache.get(
+        process.env.REQUEST_CHANNEL_ID
+      );
+
+      if (!adminChannel) {
+        return interaction.reply({
+          content: "❌ ไม่พบห้องคำขอ",
+          ephemeral: true,
+        });
+      }
+
       const embed = new EmbedBuilder()
         .setTitle("📢 มีคำขอเข้าห้อง")
-        .setDescription(`ผู้ใช้: ${interaction.member}`)
+        .setDescription(`ผู้ใช้: <@${interaction.user.id}>`)
         .setColor("Yellow");
 
       const approveBtn = new ButtonBuilder()
@@ -116,15 +170,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setLabel("❌ ปฏิเสธ")
         .setStyle(ButtonStyle.Danger);
 
-      const row = new ActionRowBuilder().addComponents(
-        approveBtn,
-        denyBtn
-      );
-
-      const adminChannel =
-        interaction.guild.channels.cache.find(
-          c => c.name === "admin-requests"
-        );
+      const row = new ActionRowBuilder().addComponents(approveBtn, denyBtn);
 
       const msg = await adminChannel.send({
         embeds: [embed],
@@ -139,7 +185,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
 
-    // ===== APPROVE / DENY =====
     if (
       interaction.customId.startsWith("approve_") ||
       interaction.customId.startsWith("deny_")
@@ -157,65 +202,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       const userId = interaction.customId.split("_")[1];
-      const target =
-        interaction.guild.members.cache.get(userId);
-
-      const logChannel =
-        interaction.guild.channels.cache.get(
-          process.env.LOG_CHANNEL_ID
-        );
-
-      const time = `<t:${Math.floor(Date.now() / 1000)}:F>`;
+      const target = interaction.guild.members.cache.get(userId);
 
       if (interaction.customId.startsWith("approve_")) {
-
-        let targetChannelName = "ไม่พบ";
-
         if (target?.voice.channel) {
-          await target.voice.setChannel(
-            process.env.TARGET_VOICE_ID
-          );
-          targetChannelName =
-            interaction.guild.channels.cache.get(
-              process.env.TARGET_VOICE_ID
-            )?.name || "ไม่พบ";
-        }
-
-        // ===== SEND LOG =====
-        if (logChannel) {
-          const logEmbed = new EmbedBuilder()
-            .setTitle("✅ อนุมัติคำขอเข้า Voice")
-            .setColor("Green")
-            .addFields(
-              { name: "ผู้ใช้", value: `<@${userId}>`, inline: true },
-              { name: "อนุมัติโดย", value: `${interaction.member}`, inline: true },
-              { name: "ย้ายไปห้อง", value: targetChannelName, inline: false },
-              { name: "เวลา", value: time }
-            );
-
-          logChannel.send({ embeds: [logEmbed] });
-        }
-
-      } else {
-
-        // ===== SEND DENY LOG =====
-        if (logChannel) {
-          const logEmbed = new EmbedBuilder()
-            .setTitle("❌ ปฏิเสธคำขอเข้า Voice")
-            .setColor("Red")
-            .addFields(
-              { name: "ผู้ใช้", value: `<@${userId}>`, inline: true },
-              { name: "ปฏิเสธโดย", value: `${interaction.member}`, inline: true },
-              { name: "เวลา", value: time }
-            );
-
-          logChannel.send({ embeds: [logEmbed] });
+          await target.voice.setChannel(process.env.TARGET_VOICE_ID);
         }
       }
 
       pendingRequests.delete(userId);
-
-      await interaction.message.delete();
+      return interaction.message.delete();
     }
   }
 });
